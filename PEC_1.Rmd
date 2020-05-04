@@ -1,0 +1,689 @@
+---
+title: "PEC 1"
+subtitle: "Análisis de datos ómicos"
+author: "Eduardo A. Sánchez Torres"
+date: "3 de mayo de 2020"
+header-includes:
+  \usepackage[spanish,es-tabla]{babel}
+output: 
+  pdf_document:
+    number_sections: true
+    fig_caption: yes
+fontsize: 12pt
+csl: elsevier-vancouver.csl
+bibliography: references.bib
+toc: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+\newpage
+
+# Selección del estudio: Datos para el análisis
+
+## Estudio
+
+El conjunto de datos utilizado pertenece a un estudio publicado [@Ferraiuolo2007], que estudia el perfil de expresión de las neuronas motoras durante la progresión de la Esclerósis Lateral Amiotrófica (ELA) en el modelo de ratón SOD1 G93A. Los datos están disponibles desde marzo de 2008 en la base de datos Gene Expression Omnibus (GEO) bajo el código de identificación [GSE10953](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE10953).
+
+La ELA es una enfermedad del sistema nervioso central, caracterizada por una degeneración progresiva de las neuronas motoras en la corteza cerebral, tronco del encéfalo y médula que implica debilidad y atrofia muscular. En el avance de la enfermedad se ve comprometida la autonomía motora, la respiración, la deglución y la comunicación oral. Por el contrario, se mantiene conservada la capacidad cognitiva, los sentidos, el intelecto y los músculos de los ojos y esfínteres [@Turner2012]. La ELA se presenta tanto en formas esporádicas como familiares, clínicamente indistinguibles, con una incidencia de 1 a 2 casos por cada 100,000 individuos. Aproximadamente el 10% de los casos son familiares, y el 20% de éstos se han relacionado con una forma mutante dominante de la enzima Cu/Zn superóxido dismutasa 1 (SOD1) [@Rosen1993].
+
+Los ratones transgénicos que portan formas mutantes de SOD1 desarrollan una enfermedad neuromuscular muy similar a la ELA humana tanto en el fenotipo como en las características histopatológicas, de modo que los ratones SOD1 mutantes se consideran un modelo confiable y se han utilizado ampliamente en la investigación de la ELA. Fuera del 2% de los casos que portan una mutación SOD1, las causas de la ELA aún se desconocen principalmente, y la alta proporción de casos esporádicos sugiere que esta enfermedad es de origen multifactorial [@Yoshihara2002].
+
+## Microarray
+
+El microarray utilizado para estudiar el perfil de expresión es concretamente el modelo GeneChip Mouse Genome 430A (Affy MOE430A) de la compañía Affymetrix.
+
+## Organismo
+
+Los ratones transgénicos empleados portan la forma mutante G93A (glicina 93 sustituida por alanina) del gen humano SOD1. Concretamente poseen 20 copias de dicho gen y como se ha dicho, desarrollan una enfermedad neurodegenerativa que reproduce características fenotípicas e histopatológicas de la ELA humana. Al nacer, estos ratones no se distingen de sus compañeros de camada, por lo que se identifican mediante detección por PCR para SOD1, utilizando ADN extraído de biopsias de cola. 
+
+La etapa presintomática dura aproximadamente 75 días desde el nacimiento, después de la cual los ratones comienzan a desarrollar temblores y pérdida del reflejo de aplastamiento de las extremidades posteriores. La enfermedad progresa rápidamente, lo que lleva a una reducción de la marcha y al deterioro del rendimiento motor, con parálisis progresiva inicialmente de las extremidades posteriores, que culmina en parálisis total y muerte a los 140 ± 6 días. Este curso de la enfermedad determinó los tiempos elegidos en este estudio para la toma de muestras: se fijaron 60 días como etapa presintomática, 90 días como etapa sintomática y 120 días como etapa final de la enfermedad.
+
+## Diseño experimental
+
+Se aislaron neuronas motoras de la médula espinal mediante la tecnología láser LCM, de tres ratones machos trangénicos (G93A) y de 3 compañeros de camada machos no transgénicos (Control), para cada tiempo fijado: 60, 90 y 120 días desde el nacimiento.
+
+De esta manera podemos considerar que el diseño exprerimental se corresponde con un diseño factorial de 2 factores, *Ratón* con dos niveles (G93A y Control) y *Tiempo* con tres niveles (60, 90 y 120 días). Se dispone de 3 réplicas para cada combinación nivel-factor (grupos), constituyendo así un total de 18 muestras.
+
+\newpage
+
+# Proceso de análisis
+
+El proceso de análisis de microarrays se ha llevado a cabo utilizando el lenguaje R versión 3.6.2 a través de los paquetes de Bioconductor versión 3.10. En este apartado se detallan cada uno de los pasos seguidos en dicho análisis.
+
+## Preparación de los datos para el análisis
+
+A partir de los archivos CEL, propios de microarrays Affymetrix, descargados de la base de datos GEO, se ha generado el correspondiente `ExpressionSet` de datos crudos, con el que comenzar el análisis.
+
+El conjunto de datos del estudio consitía en 18 archivos CEL, uno por cada muestra experimental, asociados según se muestra en la Tabla \ref{tab:tabla1}.
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+library(readr)
+targets = read_delim("./data/targets.csv",
+                      ";", escape_double = FALSE, trim_ws = TRUE)
+```
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+library(knitr)
+kable(targets,row.names = TRUE,caption = "Asociación de los 18 archivos CEL del estudio con cada condición experimental.\\label{tab:tabla1}", col.names = c("Archivo","Grupo","Ratón","Tiempo","Identificador"))
+```
+
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, results='hide'}
+library(oligo)
+celFiles = list.celfiles("./data", full.names = TRUE)
+library(Biobase)
+myTargets = read.AnnotatedDataFrame("./data/targets.csv", header = TRUE,
+                                    row.names = 1, sep=";")
+rawData = read.celfiles(celFiles, phenoData = myTargets)
+```
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, results='hide'}
+print(pData(rawData))
+colnames(rawData)
+```
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, results='hide'}
+colnames(rawData) = myTargets@data[["ShortName"]]
+```
+
+
+## Control de calidad de datos sin procesar
+
+Antes de realizar el proceso de normalización de los datos crudos del experimento, se ha realizado con control de calidad de los mismos, con la finalidad de verificar si presentan ciertas anomalías que introducirían ruido en el análisis.
+
+Para ello se ha utilizado el paquete `ArrayQualityMetrics` que analiza los datos a partir de diferentes enfoques de calidad. Los resultados obtenidos se pueden observar en la Figura \ref{figura1}.
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+#library(arrayQualityMetrics)
+#arrayQualityMetrics(rawData, outdir = "./Results/rawData_quality", force = T)
+```
+
+![Resultados del análisis con el paquete `ArrayQualityMetrics` antes de la normalización.\label{figura1}](./results/rawData_quality/table.png)
+
+Las columnas `*1`, `*2` y `*3` hacen referencia a los distintos métodos ejecutados por la función para la detección de outliers. Si el microarray de una muestra está por encima de un cierto umbral definido en la función según el método, se marca con un asterisco como un valor atípico (outlier). Cuando una determinada muestra se marca tres veces, tiene que revisarse cuidadosamente, y tal vez deba ser rechazada para mejorar la calidad general del experimento.
+
+En nuestro caso ninguna muestra se ha marcado tres veces, por lo que todas se consideran en el análisis. Únicamente un microarray se ha marcado dos veces, para las columnas `*1` y `*3`, y once microarrays se han marcado una vez para la columna `*3`.
+
+Adicionalmente se ha construido un diagrama de cajas (Figura \ref{fig:grafico1}), donde podemos observar como se distribuye la intensidad de señal de cada microarray antes de la normalización. Se aprecia una ligera variación de intensidad entre las muestras, como es de esperar para datos crudos. 
+
+```{r grafico1, echo=FALSE, fig.align='center', fig.width=7,fig.height=4, fig.cap="\\label{fig:grafico1}Distribución de intensidad de cada microarray antes de la normalizacón."}
+par ( mar = c (4 , 2 , 1 , 2 )+0.1)
+boxplot(rawData, cex.axis=0.5, las=2,  which="all",
+        col = c(rep("red", 3), rep("blue", 3), rep("green", 3),
+                rep("yellow", 3), rep("pink", 3),rep("orange", 3)),
+        main = "" )
+```
+
+
+## Normalización
+
+Antes de comenzar con el análisis de expresión diferencial, es necesario normalizar la intensidad de cada microarray para que puedan ser comparables entre sí y tratar de reducir, y si es posible eliminar, toda la variabilidad en las muestras que no se deba a razones biológicas. El proceso de normalización intenta asegurar que las diferencias de intensidad presente entre muestras, refleje únicamente la expresión diferencial de los genes, en lugar de sesgos debidos a cuestiones técnicas.
+
+El método de normalización que se ha utilizado en este análisis es el RMA (robust multi-array average) desarrollado por [@Irizarry2003] en 2003. Para ello se ha utilizado la función `rma` del paquete `oligo`.
+
+De esta manera, se ha generado en este punto el correspondiente `ExpressionSet` de los datos normalizados.
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, results='hide'}
+eset_rma = rma(rawData)
+```
+
+## Control de calidad sobre los datos normalizados
+
+Transcurrido el proceso de normalización, es conveniente realizar un control de calidad sobre los datos normalizados para explorar como ha afectado la normalización a los posibles valores atípicos detectados anteriormente.
+
+Se ha procedido de la misma manera que en el control de calidad de los datos crudos. Los resultados del análisis con `ArrayQualityMetrics` se muestran en la Figura \ref{figura2} y el diagrama de cajas de distribución de intensidades en la Figura \ref{fig:grafico2}.
+
+Podemos destacar que no se han detectado valores atípicos para ninguna de las muestras y que la distribución de intensidades es más homogénea tras la normalización de los datos crudos. 
+
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+#arrayQualityMetrics(eset_rma, outdir = "./Results/eset_rma_quality", force = T)
+```
+
+![Resultados del análisis con el paquete `ArrayQualityMetrics` de los datos normalizados.\label{figura2}](./results/eset_rma_quality/table.png)
+
+
+```{r grafico2, echo=FALSE, warning=FALSE, fig.align='center', fig.width=7,fig.height=4, fig.cap="\\label{fig:grafico2}Distribución de intensidad de cada microarray después de la normalizacón."}
+par ( mar = c (4 , 2 , 1 , 2 )+0.1)
+boxplot(eset_rma, cex.axis=0.5, las=2,  which="all",
+        col = c(rep("red", 3), rep("blue", 3), rep("green", 3),
+                rep("yellow", 3), rep("pink", 3),rep("orange", 3)),
+        main="")
+```
+
+## Filtrado no específico
+
+El filtrado no específico se utiliza para eliminar los genes que constituyen básicamente ruido, bien porque sus señales son muy bajas o bien porque apenas varían entre condiciones, por lo que no aportan nada a la selección de genes diferencialmente expresados. Además, también puede usarse para eliminar conjuntos de sondas que no tienen un identificador de gen asociado.
+
+Para ello, se ha utilizado la función `nsFilter` del paquete `genefilter`. El umbral de variabilidad (`var.cutoff`) aplicado ha sido de 0.5. Este valor se puede interpretar como un cuantil, por lo que aproximadamente el 50 % de los genes han sido filtrados. Además se ha empleado el paquete de anotación `moe430a.db`, correspondiente al tipo de microarray del estudio, para realizar la correcta anotación del `ExpressionSet` de trabajo, antes del filtrado.
+
+Así, consultando las filas de la matriz de expresiones (`assayData`) del `ExpressionSet` antes y después del filtrado, se ha observado que de 22,690 genes iniciales quedan 11,313.
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, results='hide'}
+library(genefilter)
+library(moe430a.db)
+
+annotation(eset_rma) = "moe430a.db"
+
+filtered = nsFilter(eset_rma,
+                    require.entrez = FALSE, remove.dupEntrez = FALSE,
+                    var.filter=TRUE, var.func=IQR, var.cutoff=0.5,
+                    filterByQuantile=TRUE, feature.exclude = "^AFFX")
+
+print(filtered$filter.log)
+eset_filtered = filtered$eset
+```
+
+## Selección de genes expresados diferencialmente
+
+Para la selección de genes expresados diferencialmente se ha realizado un análisis basado en modelos lineales [@Smyth2005] utilizando el paquete `limma`.
+
+De esta manera ajustamos nuestros datos a un modelo lineal como el mostrado en la ecuación \ref{eq:1}:
+
+\boldmath
+\begin{equation}
+  \label{eq:1}
+  \mathbf{Y}\mbox{ \unboldmath$=$ }\mathbf{X\alpha}\mbox{ \unboldmath$+$ }\mathbf{\epsilon}
+\end{equation}
+\unboldmath
+
+Donde
+
+* $\mathbf{Y}$ es el vector de valores de expresión observados de cada gen para cada una de las muestras.
+* $\mathbf{X}$ es la matriz de diseño del modelo lineal.
+\boldmath
+* $\alpha$ es el vector de parámetros (efectos).
+* $\epsilon$ es el vector de errores.
+\unboldmath
+
+### Matriz de diseño
+
+Se ha creado la matriz de diseño del modelo reformulando el diseño experimental hasta ahora descrito, pasando a considerar a *Grupo* como único factor con 6 niveles, derivados de todas las posibles combinaciones de los factores *Ratón* y *Tiempo* (Tabla \ref{tab:tabla1}).
+
+De esta manera nuestra matriz de diseño $\mathbf{X}$ tiene una dimensión de 18x6, tantas filas como muestras y tantas columnas como niveles del factor *Grupo*. Cada fila contiene un 1 en la columna del grupo al que pertenece la muestra y un 0 en las demás.
+
+Particularizando la ecuación \ref{eq:1} en función del modelo planteado obtenemos la ecuación \ref{eq:2}.
+
+\begin{equation}
+  \label{eq:2}
+  \begin{array}{cccccc}
+\left(\begin{array}{c} 
+y_1\\
+y_2\\
+y_3\\
+\vdots\\
+y_{16}\\
+y_{17}\\
+y_{18}
+\end{array}\right)
+&
+=
+&
+\left(\begin{array}{ccc} 
+1 & \cdots & 0\\
+1 & \cdots & 0\\
+1 & \cdots & 0\\
+\vdots & \ddots  & \vdots\\
+0 & \cdots & 1\\
+0 & \cdots & 1\\
+0 & \cdots & 1
+\end{array}\right)
+&
+\left(\begin{array}{c} 
+\alpha_1\\ 
+\alpha_2\\
+\alpha_3\\
+\alpha_4\\
+\alpha_5\\
+\alpha_6
+\end{array}\right)
+&
++
+&
+\left(\begin{array}{c} 
+\epsilon_1\\
+\epsilon_2\\
+\epsilon_3\\
+\vdots\\
+\epsilon_{16}\\
+\epsilon_{17}\\
+\epsilon_{18}
+\end{array}\right)
+\end{array}
+\end{equation}
+
+Los efectos de cada grupo, vector \boldmath $\alpha$ \unboldmath en la ecuación \ref{eq:2}, se asocian como se puede observar en la Tabla \ref{tab:tabla2}.
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+tabla_efectos = read_delim("./tabla_efectos.csv", 
+    ";", escape_double = FALSE, trim_ws = TRUE)
+kable(tabla_efectos, row.names = F,caption = "Correspondencia de los efectos del modelo con cada nivel del factor *Grupo*.\\label{tab:tabla2}", col.names = c( "$\\alpha_i$","Grupo"))
+```
+
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, results='hide'}
+designMat = model.matrix(~0+Group, pData(eset_filtered))
+colnames(designMat) = c("Control_120", "Control_60", "Control_90",
+                        "G93A_120", "G93A_60", "G93A_90")
+```
+
+
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, results='hide'}
+designMat
+```
+
+### Contrastes
+
+Se han realizado 6 comparaciones entre los 6 niveles del factor *Grupos*, con las que se cubren la totalidad de posibles expresiones diferenciales de interés, cumpliendo así con el objetivo del estudio. De esta manera, cada ratón G93A se ha comparado con su Control para cada tiempo (60, 90 y 120 días). Y por otro lado, se han comparado entre sí los ratones G93A para cada tiempo.
+
+Para realizar las distintas comparaciones se ha definido la matriz de contrastes $\mathbf{C}$ mostrada en las ecuaciones \ref{eq:3} y \ref{eq:4}, que tiene una dimensión de 6x6, tantas columnas como niveles de *Grupos* y tantas filas como comparaciones.
+
+\boldmath
+\begin{equation}
+  \label{eq:3}
+  \beta\mbox{ \unboldmath$=$ }\mathbf{C\alpha}
+\end{equation}
+\unboldmath
+
+\begin{equation}
+  \label{eq:4}
+  \begin{array}{cccc}
+\left(\begin{array}{c} 
+\beta_1\\
+\beta_2\\
+\beta_3\\
+\beta_4\\
+\beta_5\\
+\beta_6
+\end{array}\right)
+&
+=
+&
+\left(\begin{array}{cccccc} 
+1 & -1 & 0 & 0 & 0 & 0\\
+0 & 0 & 1 & -1 & 0 & 0\\
+0 & 0 & 0 & 0 & 1 & -1\\
+1 & 0 & -1 & 0 & 0 & 0\\
+1 & 0 & 0 & 0 & -1 & 0\\
+0 & 0 & 1 & 0 & -1 & 0
+\end{array}\right)
+&
+\left(\begin{array}{c} 
+\alpha_1\\ 
+\alpha_2\\
+\alpha_3\\
+\alpha_4\\
+\alpha_5\\
+\alpha_6
+\end{array}\right)
+\end{array}
+\end{equation}
+
+
+Así, se han generado a partir de la ecuación \ref{eq:4}, los siguientes parámetros $\beta$ de contraste:
+$$
+\begin{array}{c} 
+\beta_1 = \alpha_1 - \alpha_2\\
+\beta_2 = \alpha_3 - \alpha_4\\
+\beta_3 = \alpha_5 - \alpha_6\\
+\beta_4 = \alpha_1 - \alpha_3\\
+\beta_5 = \alpha_1 - \alpha_5\\
+\beta_6 = \alpha_3 - \alpha_5
+\end{array}
+$$
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, results='hide'}
+library(limma)
+cont.matrix = makeContrasts (G93A_60.Control_60 = G93A_60 - Control_60,
+                             G93A_90.Control_90 = G93A_90 - Control_90,
+                             G93A_120.Control_120 = G93A_120 - Control_120,
+                             G93A_60.G93A_90 = G93A_60 - G93A_90,
+                             G93A_60.G93A_120 = G93A_60 - G93A_120,
+                             G93A_90.G93A_120 = G93A_90 - G93A_120,
+                             levels=designMat)
+print(cont.matrix)
+```
+
+### Estimación del modelo y selección
+
+Definida la matriz de diseño y de contrastes se ha procedido con la estimación del modelo con las funciones `lmFit`, `contrasts.fit` y `eBayes`, generando el correspondiente `MArrayLM`.
+
+Para la obtención de listados de genes expresados diferencialmente en cada contraste se ha utilizado la función `topTable`. Para controlar el porcentaje de falsos positivos que pueden resultar del alto número de contrastes realizados simultáneamente entre genes, los p-valores se han ajustado por el método de Benjamini y Hochberg (BH) [@Benjamini1995].
+
+La distinción entre genes *up* o *down* regulados se ha hecho con la función `decideTests` bajo `method = "separate"`, por lo que únicamente se ha realizado un ajuste BH de p-valores entre genes, descartando el ajuste entre comparaciones.
+
+Por último, la visualización global de la expresión diferencial en cada contraste se ha llevado a cabo mediante gráficos tipo `volcano plot`.
+
+Los genes que se han considerado significativamente diferencialmente expresados en cada contraste son aquellos que presentan un fold change (FC) $\geq$ 2 (`lfc = 1`) y un p-valor $<$ 0.05 (criterios utilizados en el estudio que se analiza [@Ferraiuolo2007]). Para transformar el ratio `logFC` (log2-fold-change) a valores de fold change, se ha empleado la función `logratio2foldchange` del paquete `gtools`.
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, results='hide'}
+fit = lmFit(eset_filtered, designMat)
+fit.main = contrasts.fit(fit, cont.matrix)
+fit.main = eBayes(fit.main)
+```
+
+
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, results='hide'}
+topTab_G93A_60.Control_60 = topTable (fit.main, number=nrow(fit.main),
+                                      coef="G93A_60.Control_60", adjust="fdr",
+                                      p.value = 0.05,lfc = 1)
+topTab_G93A_90.Control_90 = topTable (fit.main, number=nrow(fit.main),
+                                      coef="G93A_90.Control_90", adjust="fdr",
+                                      p.value = 0.05,lfc = 1)
+topTab_G93A_120.Control_120 = topTable (fit.main, number=nrow(fit.main),
+                                      coef="G93A_120.Control_120", adjust="fdr",
+                                      p.value = 0.05,lfc = 1)
+topTab_G93A_60.G93A_90 = topTable (fit.main, number=nrow(fit.main),
+                                      coef="G93A_60.G93A_90", adjust="fdr",
+                                      p.value = 0.05,lfc = 1)
+topTab_G93A_60.G93A_120 = topTable (fit.main, number=nrow(fit.main),
+                                      coef="G93A_60.G93A_120", adjust="fdr",
+                                      p.value = 0.05,lfc = 1)
+topTab_G93A_90.G93A_120 = topTable (fit.main, number=nrow(fit.main),
+                                      coef="G93A_90.G93A_120", adjust="fdr",
+                                      p.value = 0.05,lfc = 1)
+```
+
+
+## Anotación de genes
+
+Para establecer la correspondencia entre las sondas del microarray y el gen al que pertenecen se ha utilizado el paquete de anotaciones `moe430a.db`, específico para la plataforma utilizada modelo GeneChip Mouse Genome 430A. Así se han asociado con los siguientes identificadores:
+
+* *Gene Symbol*: Símbolo del gen.
+* *Gene name*: Nombre del gen.
+* *Entrez gene Id*: Identificador del gen en la base de datos Entrez.
+
+Nótese que se han detectado algunas sondas asociadas con más de un gen, por lo que en esos casos no es posible determinar cúal es el gen que está en realidad diferencialmente expresado.
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, results='hide'}
+annotatedTopTable = function(topTab, anotPackage)
+{
+   topTab = cbind(PROBEID = rownames(topTab), topTab)
+   myProbes = rownames(topTab)
+   thePackage = eval(parse(text = anotPackage))
+   geneAnots = select(thePackage, myProbes, c("SYMBOL", "ENTREZID", "GENENAME"))
+   annotatedTopTab = merge(x=geneAnots, y=topTab, by.x="PROBEID", by.y="PROBEID")
+
+   return(annotatedTopTab)
+}
+```
+
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, results='hide'}
+topAnnot_G93A_60.Control_60 = annotatedTopTable(topTab_G93A_60.Control_60,
+                                                    anotPackage="moe430a.db")
+topAnnot_G93A_90.Control_90 = annotatedTopTable(topTab_G93A_90.Control_90,
+                                                    anotPackage="moe430a.db")
+topAnnot_G93A_120.Control_120 = annotatedTopTable(topTab_G93A_120.Control_120,
+                                                    anotPackage="moe430a.db")
+topAnnot_G93A_60.G93A_90 = annotatedTopTable(topTab_G93A_60.G93A_90,
+                                                    anotPackage="moe430a.db")
+topAnnot_G93A_60.G93A_120 = annotatedTopTable(topTab_G93A_60.G93A_120,
+                                                    anotPackage="moe430a.db")
+topAnnot_G93A_90.G93A_120 = annotatedTopTable(topTab_G93A_90.G93A_120,
+                                                    anotPackage="moe430a.db")
+```
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, results='hide'}
+write.csv(as.data.frame(topAnnot_G93A_60.Control_60), file = "./results/topAnnot_G93A_60.Control_60.csv", row.names = F)
+
+write.csv(as.data.frame(topAnnot_G93A_90.Control_90), file = "./results/topAnnot_G93A_90.Control_90.csv", row.names = F)
+
+write.csv(as.data.frame(topAnnot_G93A_120.Control_120), file = "./results/topAnnot_G93A_120.Control_120.csv", row.names = F)
+
+write.csv(as.data.frame(topAnnot_G93A_60.G93A_90), file = "./results/topAnnot_G93A_60.G93A_90.csv", row.names = F)
+
+write.csv(as.data.frame(topAnnot_G93A_60.G93A_120), file = "./results/topAnnot_G93A_60.G93A_120.csv", row.names = F)
+
+write.csv(as.data.frame(topAnnot_G93A_90.G93A_120), file = "./results/topAnnot_G93A_90.G93A_120.csv", row.names = F)
+```
+
+
+## Comparaciones múltiples
+
+Con el fin de conocer qué genes cambian simultáneamente entre comparaciones se han utilizado diagramas de Venn (`vennDiagram`), sin diferenciar entre genes *up* o *down* regulados. Para la construcción de los mismos ha sido necesario emplear la función `decideTests` bajo `method = "separate"` con ajuste BH de p-valores.
+
+## Análisis de significación biológica
+
+Por último, para el análisis de significación biológica se ha llevado a cabo un análisis de enrequecimiento bajo las categorías de Gene Ontology (funciones moleculares, procesos biológicos o componentes celulares) con el paquete `clusterProfiler` utilizando la función `enrichGO`. Como objeto `OrgDb` se ha utilizado `org.Mm.eg.db`. De esta manera, se ha podido determinar si una determinada categoría GO aparece significativamente más a menudo entre los genes diferencialmente expresados en cada contraste, con un p-valor $<$ 0.15 y sin fold change (FC) mínimo.
+
+
+\newpage
+
+# Resumen de resultados
+
+## Etapa presintomática (60 días)
+
+El análisis del ratón SOD1 G93A a los 60 días muestra un significativo cambio en el perfil de expresión correspondiente a 55 genes, cuando se compara con su compañero de camada no transgénico (Control). Todos ellos se encuentran *up* regulados (Tabla \ref{tab:tabla3}). El perfil de expresión diferencial se puede observar de manera global en la Figura \ref{fig:grafico3}.
+
+```{r grafico3, echo=FALSE, message=FALSE, warning=FALSE, results='hide',fig.align='center', fig.width=7,fig.height=4, fig.cap="\\label{fig:grafico3}Volcano plot con los genes diferencialmente expresados en la etapa presintomática (60 días)."}
+par ( mar = c (4 , 4 , 1 , 2 )+0.1)
+volcanoplot(fit.main, coef=1, highlight=0, main= "", pch = 1, cex = 1, col = "red3")
+abline(v=c(-1,1))
+```
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+library(gtools)
+topTable1 =  topAnnot_G93A_60.Control_60[,c(1,2,3,5)]
+FC = logratio2foldchange(topAnnot_G93A_60.Control_60[,5])
+topTable1 = cbind(topTable1, FC)
+kable(topTable1, row.names = F, col.names = c("Identificador de sonda", "Gene Symbol", "Entrez Gene Id.","log2(Fold-Change)", "Fold Change"), digits = 2, caption = "Genes diferencialmente expresados en la etapa presintomática (60 días).\\label{tab:tabla3}")
+```
+
+
+## Etapa sintomática (90 días)
+
+En la etapa sintomática de la enfermedad, la comparación entre el ratón mutante (SOD1 G93A) y su compañero de camada no transgénico (Control), no presenta ningún cambio significativo en el perfil de expresión, es decir, ningún gen se ha visto significativamente alterado. En la Figura \ref{fig:grafico4} se puede comprobar que los p-valores obtenidos en el análisis son $>>$ 0.05.
+
+```{r grafico4, echo=FALSE, message=FALSE, warning=FALSE, results='hide',fig.align='center', fig.width=7,fig.height=4, fig.cap="\\label{fig:grafico4}Volcano plot con los genes diferencialmente expresados en la etapa sintomática (90 días)."}
+
+par ( mar = c (4 , 4 , 1 , 2 )+0.1)
+volcanoplot(fit.main, coef=2, highlight=0, main= "", pch = 1, cex = 1, col = "red3")
+abline(v=c(-1,1))
+```
+
+
+## Etapa final (120 días)
+
+A los 120 días, el perfil de expresión del ratón SOD1 G93A en comparación con su control, muestra un significativo cambio en la expresión de 104 genes, entre los cuales 64 son *down* y 40 son *up* regulados (Tabla \ref{tab:tabla4}). El perfil de expresión diferencial se puede observar de manera global en la Figura \ref{fig:grafico5}.  
+
+```{r grafico5, echo=FALSE, message=FALSE, warning=FALSE, results='hide',fig.align='center', fig.width=7,fig.height=4, fig.cap="\\label{fig:grafico5}Volcano plot con los genes diferencialmente expresados en la etapa final (120 días)."}
+
+par ( mar = c (4 , 4 , 1 , 2 )+0.1)
+volcanoplot(fit.main, coef=3, highlight=0, main= "", pch = 1, cex = 1, col = "red3")
+abline(v=c(-1,1))
+```
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+topTable2 =  topAnnot_G93A_120.Control_120[,c(1,2,3,5)]
+FC = logratio2foldchange(topAnnot_G93A_120.Control_120[,5])
+topTable2 = cbind(topTable2, FC)
+kable(topTable2, row.names = F, col.names = c("Identificador de sonda", "Gene Symbol", "Entrez Gene Id.","log2(Fold-Change)", "Fold Change"), digits = 2, caption = "Genes diferencialmente expresados en la etapa final (120 días).\\label{tab:tabla4}")
+```
+
+## Comparación del perfil de expresión génica entre las tres etapas
+
+En la comparación del perfil de expresión del ratón transgénico SOD1 G93A entre los 60 y 120 días, se ha observado un cambio en la expresión de 623 genes (Figura \ref{fig:grafico7}), de los cuales 419 son *down* y 204 son *up* regulados.
+
+Entre la etapa síntomática (90 días) y final (120 días), cambia el perfil de expresión en 1382 genes en el ratón SOD1 G93A. De éstos, 765 son *down* y 617 son *up* regulados (Figura \ref{fig:grafico8}).
+
+Sin embargo, la comparación de SOD1 G93A entre los 60 y 90 días, no arroja ningún cambio significativo en la expresión de los genes (Figura \ref{fig:grafico6}).
+
+Por otro lado, se han comparado mediante diagrama de Venn las tres etapas de la enfermedad en su comparación con el ratón control (Figura \ref{fig:grafico9}). Además, se han comparado a su vez, la expresión diferencial de SOD1 G93A entre las tres etapas de la enfermedad (Figura \ref{fig:grafico10}).
+
+```{r grafico7, echo=FALSE, message=FALSE, warning=FALSE, results='hide',fig.align='center', fig.width=7,fig.height=4, fig.cap="\\label{fig:grafico7}Volcano plot con los genes diferencialmente expresados entre las etapas presintomática (60 días) y final (120 días)."}
+
+par ( mar = c (4 , 4 , 1 , 2 )+0.1)
+volcanoplot(fit.main, coef=5, highlight=0, main= "", pch = 1, cex = 1, col = "red3")
+abline(v=c(-1,1))
+```
+
+
+```{r grafico8, echo=FALSE, message=FALSE, warning=FALSE, results='hide',fig.align='center', fig.width=7,fig.height=4, fig.cap="\\label{fig:grafico8}Volcano plot con los genes diferencialmente expresados entre las etapas sintomática (90 días) y final (120 días)."}
+
+par ( mar = c (4 , 4 , 1 , 2 )+0.1)
+volcanoplot(fit.main, coef=6, highlight=0, main= "", pch = 1, cex = 1, col = "red3")
+abline(v=c(-1,1))
+```
+
+```{r grafico6, echo=FALSE, message=FALSE, warning=FALSE, results='hide',fig.align='center', fig.width=7,fig.height=4, fig.cap="\\label{fig:grafico6}Volcano plot con los genes diferencialmente expresados entre las etapas presintomática (60 días) y sintomática (90 días)"}
+
+par ( mar = c (4 , 4 , 1 , 2 )+0.1)
+volcanoplot(fit.main, coef=4, highlight=0, main= "", pch = 1, cex = 1, col = "red3")
+abline(v=c(-1,1))
+```
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, results='hide'}
+res = decideTests(fit.main, method="separate", adjust.method="fdr", p.value=0.05, lfc=1)
+sum.res.rows = apply(abs(res),1,sum)
+res.selected = res[sum.res.rows!=0,]
+print(summary(res))
+```
+
+```{r grafico9, echo=FALSE, message=FALSE, warning=FALSE, results='hide',fig.align='center', fig.width=7,fig.height=4, fig.cap="\\label{fig:grafico9}Diagrama de Venn con los genes diferencialmente expresados entre las etapas presintomática, sintomática y final (60, 90 y 120 días)."}
+par ( mai = c (0 , 0 , 0 , 0 )+0.1)
+vennDiagram(res.selected[,c(1:3)], cex=0.9, main="", names = c("Presintomática", "Sintomática", "Final"), circle.col = c("red", "blue", "green3"))
+```
+
+```{r grafico10, echo=FALSE, message=FALSE, warning=FALSE, results='hide',fig.align='center', fig.width=7,fig.height=4, fig.cap="\\label{fig:grafico10}Diagrama de Venn con los genes diferencialmente expresados entre las comparaciones entre etapas."}
+#par ( mar = c (2 , 2 , 1 , 2 )+0.1)
+vennDiagram(res.selected[,c(4:6)], cex=0.8, main="", names = c("Presintomática vs Sintomática", "Presintomática vs Final", "Sintomática vs Final"),circle.col = c("red", "blue", "green3"))
+```
+
+
+<!-- ```{r echo=FALSE, message=FALSE, warning=FALSE} -->
+<!-- topTable3 =  topAnnot_G93A_60.G93A_120[,c(1,2,3,5)] -->
+<!-- kable(topTable3, row.names = F, col.names = c("Identificador de sonda", "Gene Symbol", "Entrez Gene Id.", "Fold Change"), digits = 2, caption = "Genes diferencialmente expresados entre las etapas presintomática (60 días) y final (120 días).\\label{tab:tabla5}") -->
+<!-- ``` -->
+
+<!-- ```{r echo=FALSE, message=FALSE, warning=FALSE} -->
+<!-- topTable4 =  topAnnot_G93A_90.G93A_120[,c(1,2,3,5)] -->
+<!-- kable(topTable4, row.names = F, col.names = c("Identificador de sonda", "Gene Symbol", "Entrez Gene Id.", "Fold Change"), digits = 2, caption = "Genes diferencialmente expresados entre las etapas sintomática (90 días) y final (120 días).\\label{tab:tabla6}") -->
+<!-- ``` -->
+
+\newpage
+
+## Significación biológica
+
+Tras el análisis de enriquecimiento realizado, bajo las categorías de GO, en cada una de las comparaciones significativas realizadas, se muestran las primeras cinco categorías ordenadas por su significancia en las Tablas \ref{tab:tabla7}, \ref{tab:tabla8}, \ref{tab:tabla9} y \ref{tab:tabla10}. Para observar el resto de entradas en cada tabla, acúdase a los archivos CSV del repositorio.
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, results='hide'}
+topTab_G93A_60.Control_60 = topTable (fit.main, number=nrow(fit.main),
+                                      coef="G93A_60.Control_60", adjust="fdr")
+topTab_G93A_90.Control_90 = topTable (fit.main, number=nrow(fit.main),
+                                      coef="G93A_90.Control_90", adjust="fdr")
+topTab_G93A_120.Control_120 = topTable (fit.main, number=nrow(fit.main),
+                                      coef="G93A_120.Control_120", adjust="fdr")
+topTab_G93A_60.G93A_90 = topTable (fit.main, number=nrow(fit.main),
+                                      coef="G93A_60.G93A_90", adjust="fdr")
+topTab_G93A_60.G93A_120 = topTable (fit.main, number=nrow(fit.main),
+                                      coef="G93A_60.G93A_120", adjust="fdr")
+topTab_G93A_90.G93A_120 = topTable (fit.main, number=nrow(fit.main),
+                                      coef="G93A_90.G93A_120", adjust="fdr")
+```
+
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, results='hide'}
+topAnnot_G93A_60.Control_60 = annotatedTopTable(topTab_G93A_60.Control_60,
+                                                    anotPackage="moe430a.db")
+topAnnot_G93A_90.Control_90 = annotatedTopTable(topTab_G93A_90.Control_90,
+                                                    anotPackage="moe430a.db")
+topAnnot_G93A_120.Control_120 = annotatedTopTable(topTab_G93A_120.Control_120,
+                                                    anotPackage="moe430a.db")
+topAnnot_G93A_60.G93A_90 = annotatedTopTable(topTab_G93A_60.G93A_90,
+                                                    anotPackage="moe430a.db")
+topAnnot_G93A_60.G93A_120 = annotatedTopTable(topTab_G93A_60.G93A_120,
+                                                    anotPackage="moe430a.db")
+topAnnot_G93A_90.G93A_120 = annotatedTopTable(topTab_G93A_90.G93A_120,
+                                                    anotPackage="moe430a.db")
+```
+
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, results='hide'}
+listGenes = function(topAnnot)
+{
+  d = subset(topAnnot, adj.P.Val<0.15)[,c(3,5)]
+  geneList = d[,2]
+  names(geneList) = as.character(d[,1])
+  geneList = sort(geneList, decreasing = TRUE)
+return(geneList)
+}
+```
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, results='hide'}
+geneList_G93A_60.Control_60 = listGenes(topAnnot_G93A_60.Control_60)
+geneList_G93A_90.Control_90 = listGenes(topAnnot_G93A_90.Control_90)
+geneList_G93A_120.Control_120 = listGenes(topAnnot_G93A_120.Control_120)
+geneList_G93A_60.G93A_90 = listGenes(topAnnot_G93A_60.G93A_90)
+geneList_G93A_60.G93A_120 = listGenes(topAnnot_G93A_60.G93A_120)
+geneList_G93A_90.G93A_120 = listGenes(topAnnot_G93A_90.G93A_120)
+```
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, results='hide', eval=FALSE}
+library(clusterProfiler)
+ego_G93A_60.Control_60 = enrichGO(names(geneList_G93A_60.Control_60),  OrgDb = "org.Mm.eg.db", ont = "ALL", pAdjustMethod = "BH", pvalueCutoff  = 0.01, qvalueCutoff  = 0.05, readable = TRUE)
+ego_G93A_60.Control_60 = as.data.frame(ego_G93A_60.Control_60)
+write.csv(ego_G93A_60.Control_60, file = "./results/ego_G93A_60.Control_60.csv", row.names = F)
+
+ego_G93A_120.Control_120 = enrichGO(names(geneList_G93A_120.Control_120),  OrgDb = "org.Mm.eg.db", ont = "ALL", pAdjustMethod = "BH", pvalueCutoff  = 0.01, qvalueCutoff  = 0.05, readable = TRUE)
+ego_G93A_120.Control_120 = as.data.frame(ego_G93A_120.Control_120)
+write.csv(ego_G93A_120.Control_120, file = "./results/ego_G93A_120.Control_120.csv", row.names = F)
+
+ego_G93A_60.G93A_120 = enrichGO(names(geneList_G93A_60.G93A_120),  OrgDb = "org.Mm.eg.db", ont = "ALL", pAdjustMethod = "BH", pvalueCutoff  = 0.01, qvalueCutoff  = 0.05, readable = TRUE)
+ego_G93A_60.G93A_120 = as.data.frame(ego_G93A_60.G93A_120)
+write.csv(ego_G93A_60.G93A_120, file = "./results/ego_G93A_60.G93A_120.csv", row.names = F)
+
+ego_G93A_90.G93A_120 = enrichGO(names(geneList_G93A_90.G93A_120),  OrgDb = "org.Mm.eg.db", ont = "ALL", pAdjustMethod = "BH", pvalueCutoff  = 0.01, qvalueCutoff  = 0.05, readable = TRUE)
+ego_G93A_90.G93A_120 = as.data.frame(ego_G93A_90.G93A_120)
+write.csv(ego_G93A_90.G93A_120, file = "./results/ego_G93A_90.G93A_120.csv", row.names = F)
+
+```
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+ego_G93A_60.Control_60 = read_csv("./results/ego_G93A_60.Control_60.csv")
+egoTable = ego_G93A_60.Control_60[1:5,c(2,3,4)]
+kable(egoTable, row.names = F, col.names = c("GO Id.","Descripción", "Gene ratio"),align = c("l","l","r"), caption = "Primeras cinco categorías de GO más significativas resultantes del análisis de enriquecimiento en la etapa presintomática (60 días).\\label{tab:tabla7}")
+```
+
+\newpage
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+ego_G93A_120.Control_120 = read_csv("./results/ego_G93A_120.Control_120.csv")
+egoTable = ego_G93A_120.Control_120[1:5,c(2,3,4)]
+kable(egoTable, row.names = F, col.names = c("GO Id.","Descripción", "Gene ratio"),align = c("l","l","r"), caption = "Primeras cinco categorías de GO más significativas resultantes del análisis de enriquecimiento en la etapa final (120 días).\\label{tab:tabla8}")
+```
+
+
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+ego_G93A_60.G93A_120 = read_csv("./results/ego_G93A_60.G93A_120.csv")
+egoTable = ego_G93A_60.G93A_120[1:5,c(2,3,4)]
+kable(egoTable, row.names = F, col.names = c("GO Id.","Descripción", "Gene ratio"),align = c("l","l","r"), caption = "Primeras cinco categorías de GO más significativas resultantes del análisis de enriquecimiento entre las etapas presintomática (60 días) y final (120 días).\\label{tab:tabla9}")
+```
+
+
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+ego_G93A_90.G93A_120 = read_csv("./results/ego_G93A_90.G93A_120.csv")
+egoTable = ego_G93A_90.G93A_120[1:5,c(2,3,4)]
+kable(egoTable, row.names = F, col.names = c("GO Id.","Descripción", "Gene ratio"),align = c("l","l","r"), caption = "Primeras cinco categorías de GO más significativas resultantes del análisis de enriquecimiento entre las etapas sintomática (90 días) y final (120 días).\\label{tab:tabla10}")
+```
+
+
+
+\newpage
+
+# Repositorio GitHub
+
+En el siguiente enlace del repositorio del proyecto en GitHub, se encuentran disponibles los resultados y el código utilizado:
+
+[https://github.com/edsantor/PEC_1](https://github.com/edsantor/PEC_1)
+
+\newpage
+
+# Referencias
